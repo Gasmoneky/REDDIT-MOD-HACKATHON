@@ -22,7 +22,7 @@
     "@devvit/public-api": "^0.12.22",
     "@devvit/start": "0.12.22",
     "@devvit/web": "0.12.22",
-    "@hono/node-server": "^1.19.9",
+    "@hono/node-server": "^2.0.4",
     "clsx": "2.1.1",
     "devvit": "0.12.22",
     "hono": "4.11.7",
