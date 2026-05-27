@@ -200,7 +200,7 @@ For major changes, please discuss them in the issue tracker first.
 
 # 📄 License
 
-MIT © Your Name
+MIT © RYAN ONYANGO OCHIENG
 
 ---
 
