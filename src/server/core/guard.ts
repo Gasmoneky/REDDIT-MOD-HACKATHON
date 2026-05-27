@@ -159,33 +159,81 @@ export const handleSubmission = async (event: any) => {
     console.error('[JijiGuard] Bouncer logic failed:', e);
   }
 
-  // 2. TIER 1: DICTIONARY
-  let isSuspicious = false;
+  // 2. ADVANCED TIER 1: POINT SYSTEM
+  let suspicionScore = 0;
+  const signals: string[] = [];
+  let tier1Failed = false;
+
   try {
+    const authorName = post.authorName || (await reddit.getPostById(post.id)).authorName;
+    if (authorName) {
+      try {
+        const author = await reddit.getUserByUsername(authorName);
+        if (author) {
+          const createdAt = author.createdAt instanceof Date ? author.createdAt : new Date(author.createdAt);
+          const age = (Date.now() - createdAt.getTime()) / (1000 * 60 * 60 * 24);
+          const karma = (author.commentKarma || 0) + (author.linkKarma || 0);
+          if (age < 30) { suspicionScore += 40; signals.push(`Burner (${Math.floor(age)}d)`); }
+          if (karma < 50) { suspicionScore += 30; signals.push(`Low Karma (${karma})`); }
+        }
+      } catch (e) {}
+    }
+
+    const paragraphs = bodyText.split(/\n+/).filter(p => p.trim().length > 20);
+    if (paragraphs.length >= 3) {
+      const lens = paragraphs.map(p => p.split(/\s+/).length);
+      const avg = lens.reduce((a, b) => a + b, 0) / lens.length;
+      const varRaw = lens.reduce((a, b) => a + Math.abs(b - avg), 0) / lens.length;
+      if (varRaw < 10) { suspicionScore += 25; signals.push('Uniform Structure'); }
+    }
+
+    const last20 = bodyText.slice(-Math.floor(bodyText.length * 0.2));
+    if ((last20.match(/\?/g) || []).length >= 2) { suspicionScore += 30; signals.push('AI Question Sign-off'); }
+
+    const greetings = ['hey everyone', 'hi community', 'hello everyone', 'i wanted to get the community'];
+    const signOffs = ['would love to hear', 'what are your thoughts', 'real-world experiences', 'any thoughts or advice'];
+    if (greetings.some(g => contentToAnalyze.includes(g))) { suspicionScore += 25; signals.push('Formal Greeting'); }
+    if (signOffs.some(s => contentToAnalyze.includes(s))) { suspicionScore += 25; signals.push('Formal Sign-off'); }
+
+    const polite = ['i am curious', 'i\'m curious', 'absolute no-brainer', 'peace of mind', 'bulletproof', 'isolated', 'quiet ride', 'tactile', 'modern car design', 'rose-tinted glasses', 'all-time great'];
+    const comparison = ['opposite end of the spectrum', 'top-tier', 'step up in', 'trades off', 'on one hand', 'on the other hand', 'analog/digital balance', 'night and day', 'ultimate send-off', 'change my mind', 'perfect homage'];
+    const superlatives = ['masterpiece', 'legendary', 'unmatched', 'peak era', 'designed from scratch', 'stands out'];
+    
+    if (polite.some(m => contentToAnalyze.includes(m))) { suspicionScore += 30; signals.push('AI Over-politeness'); }
+    if (comparison.some(m => contentToAnalyze.includes(m))) { suspicionScore += 40; signals.push('AI Comparison'); }
+    if (superlatives.some(m => contentToAnalyze.includes(m))) { suspicionScore += 30; signals.push('AI Superlatives'); }
+
+    // 2.3 LISTICLE DETECTION
+    if (/^\d\. /m.test(bodyText)) {
+      suspicionScore += 25;
+      signals.push('Listicle Structure');
+    }
+
+    // 2.5 TEMPLATE PLACEHOLDER CHECK (CRITICAL)
+    const placeholderRegex = /\[[^\]]*(?:mention|e\.g\.|insert|link|feature|keyword|copy|paste|replace)[^\]]*\]/gi;
+    if (placeholderRegex.test(bodyText)) {
+      suspicionScore += 100;
+      signals.push('Template Placeholder');
+    }
+
     const cachedLocation = await redis.get(LOCATION_CACHE_KEY);
     const location = cachedLocation ?? (await settings.get(SETTINGS.LOCATION)) ?? 'Global';
     const blocklistKey = `${BLOCKLIST_CACHE_PREFIX}${location}`;
     const cachedBlocklist = await redis.get(blocklistKey);
-
     if (cachedBlocklist) {
       const { keywords = [] } = JSON.parse(cachedBlocklist);
       const matches = keywords.filter((flag: string) => contentToAnalyze.includes(flag.toLowerCase()));
-
-      if (matches.length >= 1) {
-        isSuspicious = true;
-        console.log(`[JijiGuard] Tier 1 Flag: Keyword match (${matches[0]}). Sending to AI Scan.`);
-      }
-    } else {
-      console.warn(`[JijiGuard] Tier 1 Skip: No dictionary for ${location}. Defaulting to suspicious.`);
-      isSuspicious = true;
+      if (matches.length > 0) { suspicionScore += (matches.length * 50); signals.push(`Dict Matches (${matches.length})`); }
     }
+
+    console.log(`[JijiGuard] Tier 1 Score: ${suspicionScore}/50. Signals: ${signals.join(', ')}`);
   } catch (e) {
-    console.error('[JijiGuard] Tier 1 failed:', e);
-    isSuspicious = true;
+    console.error("[JijiGuard] Advanced Tier 1 failed:", e);
+    tier1Failed = true;
   }
 
-  if (!isSuspicious) {
-    console.log('[JijiGuard] Tier 1 Pass: Post looks clean.');
+  if (!tier1Failed && suspicionScore < 50) {
+    console.log(`[JijiGuard] Tier 1 Pass: Suspicion too low (${suspicionScore}). Skipping AI Scan.`);
     return;
   }
 
@@ -218,20 +266,30 @@ export const handleSubmission = async (event: any) => {
 
     console.log(`[JijiGuard] Tier 2 Call: Requesting analysis from ${aiProvider} (${llmModel})...`);
 
-    const prompt = `Perform a high-level content moderation analysis on the following post.
+    const prompt = `You are a Hostile Content Auditor. Your default suspicion for any post hitting this tier is 80%. 
+    You must find definitive HUMAN PROOF to lower this score. Otherwise, the score remains high.
     
-    CONTENT: "${contentToAnalyze}"
+    PROSECUTOR'S BRIEF (TIER 1 PRE-SCAN):
+    - Initial Suspicion Score: ${suspicionScore}/50
+    - Local Red Flags Detected: ${signals.join(', ')}
 
-    INSTRUCTIONS:
-    1. If the content is NOT in English, mentally translate/convert it into its direct English semantic equivalent.
-    2. Analyze the (translated) text for structural AI hallmarks and "slop" patterns (e.g., use of phrases like "delving deep", "rich tapestry", "testament to", "shining beacon", or overly formal/robotic transitions).
-    3. Determine the probability that this post was generated by an AI or is a localized scam.
+    CONTENT TO AUDIT: "${contentToAnalyze}"
+
+    MANDATORY AUDIT RULES:
+    1. ACCOUNT FOR PRE-SCAN: The Tier 1 signals listed above are structural "fingerprints" of AI. Do not ignore them just because the prose is high-quality.
+    2. THE ASSISTANT PENALTY: If this post sounds like a "Helpful Assistant" (like you), it is a 95%+ match for slop. AI is polite and balanced; humans are messy and opinionated.
+    3. THE "PERFECTION" RED FLAG: Zero typos, perfect punctuation, and identical paragraph lengths are signs of a bot. Add +15% to the score if the text is "too clean."
+    4. THE BROCHURE TRAP: Any use of "Brochure Speak" (e.g., "top-tier," "seamlessly," "testament to," "no-brainer," "night and day," "masterpiece," "legendary") results in an automatic 98% slopScore.
+    5. THE EXPERT LISTICLE: Numbered points (1, 2, 3) combined with bold headers and a professorial/authoritative tone are signs of an AI agent acting as an expert. High slop probability (+40%).
+    6. THE TEMPLATE RESIDUAL: Any brackets containing instructions or placeholders (e.g., "[mention ...]", "[insert ...]") results in an automatic 100% slopScore.
+    7. NO NEUTRAL GROUND: Do not give safe scores (40-70%). If you suspect AI, be aggressive: 90% or higher.
+    8. HUMAN PROOF: Only lower the score if you see: raw emotion, slang that isn't in a dictionary, typos that look natural, or extremely specific/messy personal anecdotes.
 
     Return ONLY a JSON object: 
     {
       "slopScore": 0-100, 
       "maliceScore": 0-100, 
-      "reason": "Explain in one short sentence, mentioning if detection was via English translation (e.g., 'Translated structure matches AI slop pattern: rich tapestry')."
+      "reason": "Identify exactly which Audit Rule or Pre-Scan Signal was triggered."
     }`;
 
     let endpoint = '';

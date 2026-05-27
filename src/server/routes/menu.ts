@@ -21,6 +21,14 @@ menu.post('/configure', async (c) => {
               helpText: 'Specify your country (e.g., Kenya, Mexico).',
             },
             {
+              name: 'communityDescription',
+              label: 'Community Niche & Threat Profile',
+              type: 'paragraph',
+              required: true,
+              helpText: 'Be comprehensive! Describe what your sub is about, what kind of "AI slop" you see (e.g. fake reviews), and specific scams your users face. This powers the custom dictionary.',
+              placeholder: 'e.g., We are a sub for vintage watch collectors. We hate generic AI reviews that use terms like "time-honored tradition." We face scams involving fake service records and escrow fraud.',
+            },
+            {
               name: 'aiProvider',
               label: 'AI Service Provider',
               type: 'select',

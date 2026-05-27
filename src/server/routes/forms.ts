@@ -19,6 +19,7 @@ forms.post('/config-submit', async (c) => {
   
   // Extract values, handling that 'select' fields return arrays in Devvit
   const location = values.location || 'Global';
+  const communityDescription = values.communityDescription || '';
   const aiProvider = Array.isArray(values.aiProvider) ? values.aiProvider[0] : values.aiProvider || 'xai';
   const llmApiKey = (values.llmApiKey || '').trim();
   const llmModel = (values.llmModel || '').trim();
@@ -50,6 +51,7 @@ forms.post('/config-submit', async (c) => {
       settingsToSave[SETTINGS.API_KEY] = llmApiKey;
     }
     if (llmModel) settingsToSave[SETTINGS.LLM_MODEL] = llmModel;
+    if (communityDescription) settingsToSave[SETTINGS.COMMUNITY_DESCRIPTION] = communityDescription;
     if (proxyServerUrl) settingsToSave[SETTINGS.PROXY_SERVER_URL] = proxyServerUrl;
     if (minTitleWordCount !== undefined && minTitleWordCount !== null) settingsToSave[SETTINGS.MIN_TITLE_WORD_COUNT] = minTitleWordCount.toString();
     if (minBodyWordCount !== undefined && minBodyWordCount !== null) settingsToSave[SETTINGS.MIN_BODY_WORD_COUNT] = minBodyWordCount.toString();
@@ -65,18 +67,21 @@ forms.post('/config-submit', async (c) => {
     const activeLLMKey = llmApiKey || await redis.get(SETTINGS.LLM_API_KEY) || await settings.get<string>(SETTINGS.LLM_API_KEY);
 
     if (activeLLMKey) {
-      console.log(`[JijiGuard] Generating dynamic dictionary for location: ${location} using ${activeLLMModel} (${aiProvider})...`);
+      console.log(`[JijiGuard] Generating dynamic context-aware dictionary for ${location} using ${activeLLMModel}...`);
       
-      const prompt = `Generate a JSON object with a single key "keywords" containing an array of 60 high-sensitivity "tripwire" strings for content moderation in ${location}. 
+      const prompt = `You are a Senior Security Researcher for the ${location} region. You are protecting a subreddit described as: "${communityDescription}".
+      
+      Generate a JSON object with a single key "keywords" containing an array of 120 high-sensitivity "tripwire" strings (2-4 word phrases).
+      
+      The goal is to catch "Niche Slop" and scams specific to this community locally to save API costs.
+      
       The array MUST include:
-      1. LOCAL AI SLOP EQUIVALENTS: Provide words or phrases in the native language(s) of ${location} that are the direct semantic equivalents of English AI markers like "delve deep", "rich tapestry", "testament to", "completely transformative", "nuanced approach", "shining beacon", "treasure trove".
-      2. UNIVERSAL AI MARKERS: Always include the English versions: "delve", "rich tapestry", "treasure trove", "paradigm", "realm", "foster synergy".
-      3. FILLER WORDS: Common low-value filler words used in ${location} (e.g., "um", "ah", "yaani", "basically") that indicate automated or low-effort content.
-      4. LOCALIZED SCAM/FRAUD: Specific keywords, slang, and transaction markers commonly used in fraudulent posts within ${location} (e.g., "tuma fare", "wash wash").
+      1. NICHE REVIEW SLOP (40 entries): Phrases AI uses when writing opinions or comparisons about this niche. Examples for cars: "modern car design", "infinitely more premium", "analog/digital balance", "tactile physical buttons", "getting out of hand", "well-machined aluminum".
+      2. DOMAIN-SPECIFIC SCAMS (40 entries): Transaction markers, urgency hooks, and fraud patterns unique to this community niche.
+      3. UNIVERSAL AI HALLMARKS (20 entries): "delve into the", "rich tapestry of", "a testament to", "nuanced approach".
+      4. FORMAL TRANSITIONS & GREETINGS (20 entries): "furthermore", "consequently", "i hope this finds you well".
 
-      The goal is for this list to catch posts that look like they were translated from an English LLM or follow LLM speech patterns.
-      
-      Return ONLY the JSON object. Example: {"keywords": ["delve", "rich tapestry", "tuma fare", "yaani", "urgent 2k"]}`;
+      Keep phrases concise (2-4 words). Return ONLY the JSON object. Example: {"keywords": ["phrase one", "phrase two"]}`;
 
       try {
         let endpoint = '';
@@ -86,12 +91,10 @@ forms.post('/config-submit', async (c) => {
           'User-Agent': 'JijiGuard-Reddit-Bot/1.0'
         };
 
-        // Fallback for model if missing
         const activeModel = llmModel || (aiProvider === 'gemini' ? 'gemini-1.5-flash' : (aiProvider === 'xai' ? 'grok-2-latest' : 'gpt-4o-mini'));
 
         if (aiProvider === 'gemini') {
           endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(activeModel)}:generateContent?key=${encodeURIComponent(activeLLMKey)}`;
-
           body = {
             contents: [{ parts: [{ text: prompt }] }],
             generationConfig: { response_mime_type: "application/json" }
@@ -115,13 +118,11 @@ forms.post('/config-submit', async (c) => {
         if (response.ok) {
           const result = await response.json();
           let rawContent = '';
-          
           if (aiProvider === 'gemini') {
             rawContent = result.candidates?.[0]?.content?.parts?.[0]?.text;
           } else {
             rawContent = result.choices?.[0]?.message?.content;
           }
-
           if (rawContent) {
             const dictionary = JSON.parse(rawContent);
             const cacheKey = `${BLOCKLIST_CACHE_PREFIX}${location}`;
