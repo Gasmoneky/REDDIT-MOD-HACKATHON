@@ -1,0 +1,68 @@
+{
+  "$schema": "https://developers.reddit.com/schema/config-file.v1.json",
+  "name": "jiji-guard",
+  "post": {
+    "dir": "dist/client",
+    "entrypoints": {
+      "default": {
+        "inline": true,
+        "entry": "splash.html"
+      },
+      "game": {
+        "entry": "game.html"
+      }
+    }
+  },
+  "server": {
+    "dir": "dist/server",
+    "entry": "index.cjs"
+  },
+  "menu": {
+    "items": [
+      {
+        "label": "Configure JijiGuard",
+        "description": "Set your region and refresh blocklist",
+        "location": "subreddit",
+        "forUserType": "moderator",
+        "endpoint": "/internal/menu/configure"
+      },
+      {
+        "label": "Create a new post",
+        "description": "jiji-guard",
+        "location": "subreddit",
+        "forUserType": "moderator",
+        "endpoint": "/internal/menu/post-create"
+      }
+    ]
+  },
+  "forms": {
+    "configForm": "/internal/form/config-submit"
+  },
+  "triggers": {
+    "onAppInstall": "/internal/triggers/on-app-install",
+    "onAppUpgrade": "/internal/triggers/on-app-upgrade",
+    "onPostSubmit": "/internal/triggers/on-post-submit"
+  },
+  "scripts": {
+    "dev": "vite build --watch",
+    "build": "vite build"
+  },
+  "dev": {
+    "subreddit": "jiji_guard_dev"
+  },
+  "permissions": {
+    "http": {
+      "domains": [
+        "raw.githubusercontent.com",
+        "api.sapling.ai",
+        "generativelanguage.googleapis.com",
+        "api.openai.com",
+        "api.x.ai"
+      ]
+    },
+    "reddit": {
+      "enable": true,
+      "scope": "moderator"
+    }
+  }
+}
